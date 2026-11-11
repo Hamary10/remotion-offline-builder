@@ -1,0 +1,117 @@
+name: Build Remotion 4.0.484 Windows x64 offline bundle
+
+# Only a deliberate manual dispatch can start this workflow.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: remotion-offline-builder-once
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'Hamary10/remotion-offline-builder' && github.ref == 'refs/heads/main'
+    runs-on: windows-2022
+    timeout-minutes: 10
+    env:
+      NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+      NPM_CONFIG_AUDIT: 'false'
+      NPM_CONFIG_FUND: 'false'
+      NPM_CONFIG_UPDATE_NOTIFIER: 'false'
+      NPM_CONFIG_CACHE: ${{ runner.temp }}\remotion-npm-cache
+    steps:
+      - name: Set up fixed Node.js version
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.15.0'
+
+      - name: Resolve and package public npm dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:RUNNER_TEMP 'remotion-offline-4.0.484'
+          $out = Join-Path $env:RUNNER_TEMP 'remotion-offline-artifact'
+          New-Item -ItemType Directory -Force -Path $root, $out | Out-Null
+          Set-Location -LiteralPath $root
+
+          $manifest = @{
+            name = 'remotion-offline-win-x64'
+            version = '1.0.0'
+            private = $true
+            dependencies = @{
+              'remotion' = '4.0.484'
+              '@remotion/cli' = '4.0.484'
+              'react' = '19.2.3'
+              'react-dom' = '19.2.3'
+            }
+          } | ConvertTo-Json -Depth 6
+          [System.IO.File]::WriteAllText((Join-Path $root 'package.json'), $manifest + "`n", [System.Text.UTF8Encoding]::new($false))
+
+          # Resolve a deterministic lockfile, then fetch packages from the official registry.
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'Lockfile generation failed.' }
+          npm ci --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed.' }
+
+          $lock = Get-Content -Raw -LiteralPath (Join-Path $root 'package-lock.json') | ConvertFrom-Json
+          if ($lock.packages.'node_modules/remotion'.version -ne '4.0.484' -or
+              $lock.packages.'node_modules/@remotion/cli'.version -ne '4.0.484') {
+            throw 'Remotion versions in lockfile do not match the approved version.'
+          }
+          foreach ($pkg in Get-ChildItem -LiteralPath (Join-Path $root 'node_modules/@remotion') -Directory) {
+            $metadata = Get-Content -Raw -LiteralPath (Join-Path $pkg.FullName 'package.json') | ConvertFrom-Json
+            if ($metadata.version -ne '4.0.484') {
+              throw "Unexpected Remotion dependency version: $($metadata.name) $($metadata.version)"
+            }
+          }
+          node -e "for (const name of ['remotion','@remotion/cli','react','react-dom']) { const p=require(name+'/package.json'); console.log(p.name,p.version) }"
+          if ($LASTEXITCODE -ne 0) { throw 'Installed dependency inspection failed.' }
+          node -e "require('esbuild').transformSync('const x: number = 1', {loader: 'ts'})"
+          if ($LASTEXITCODE -ne 0) { throw 'Native bundler availability check failed.' }
+          & (Join-Path $root 'node_modules/.bin/remotion.cmd') --version
+          if ($LASTEXITCODE -ne 0) { throw 'Remotion CLI smoke check failed.' }
+
+          $details = @{
+            platform = 'win32-x64'
+            remotionVersion = '4.0.484'
+            reactVersion = '19.2.3'
+            nodeVersion = (node --version)
+            npmVersion = (npm --version)
+            dependencySource = 'https://registry.npmjs.org/'
+            installScripts = 'disabled during packaging'
+            offlineBundleType = 'preinstalled node_modules plus package-lock.json; no npm download needed for extraction'
+            browserIncluded = $false
+            commit = $env:GITHUB_SHA
+            createdUtc = [DateTime]::UtcNow.ToString('o')
+          } | ConvertTo-Json -Depth 5
+          [System.IO.File]::WriteAllText((Join-Path $root 'BUILD_INFO.json'), $details + "`n", [System.Text.UTF8Encoding]::new($false))
+
+          $hashLines = foreach ($file in Get-ChildItem -LiteralPath $root -File -Recurse -Force | Sort-Object FullName) {
+            $rel = $file.FullName.Substring($root.Length + 1).Replace('\', '/')
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash.ToLowerInvariant()
+            "$hash  $rel"
+          }
+          [System.IO.File]::WriteAllLines((Join-Path $root 'SHA256SUMS.txt'), [string[]]$hashLines, [System.Text.UTF8Encoding]::new($false))
+
+          $zip = Join-Path $out 'remotion-4.0.484-win-x64-offline.zip'
+          [System.IO.Compression.ZipFile]::CreateFromDirectory($root, $zip, [System.IO.Compression.CompressionLevel]::Optimal, $false)
+          $maxBytes = 400MB
+          if ((Get-Item -LiteralPath $zip).Length -gt $maxBytes) {
+            Remove-Item -LiteralPath $zip -Force
+            throw 'Bundle exceeds 400 MiB budget; nothing will be uploaded.'
+          }
+          $zipHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
+          [System.IO.File]::WriteAllText((Join-Path $out 'ZIP_SHA256.txt'), "$zipHash  remotion-4.0.484-win-x64-offline.zip`n", [System.Text.UTF8Encoding]::new($false))
+          Write-Host "Ready: $((Get-Item $zip).Length) bytes; SHA-256 $zipHash"
+
+      - name: Upload short-lived ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: remotion-4.0.484-win-x64-offline
+          path: ${{ runner.temp }}/remotion-offline-artifact/*
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
