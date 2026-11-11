@@ -1,6 +1,6 @@
 name: Build Remotion 4.0.484 Windows x64 offline bundle
 
-# Only a deliberate manual dispatch can start this workflow.
+# This workflow can only be dispatched manually.
 on:
   workflow_dispatch:
 
@@ -21,7 +21,6 @@ jobs:
       NPM_CONFIG_AUDIT: 'false'
       NPM_CONFIG_FUND: 'false'
       NPM_CONFIG_UPDATE_NOTIFIER: 'false'
-      NPM_CONFIG_CACHE: ${{ runner.temp }}\remotion-npm-cache
     steps:
       - name: Set up fixed Node.js version
         uses: actions/setup-node@v4
@@ -34,6 +33,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $root = Join-Path $env:RUNNER_TEMP 'remotion-offline-4.0.484'
           $out = Join-Path $env:RUNNER_TEMP 'remotion-offline-artifact'
+          # Runner-specific paths are available here, inside an executing step.
+          $env:NPM_CONFIG_CACHE = Join-Path $env:RUNNER_TEMP 'remotion-npm-cache'
           New-Item -ItemType Directory -Force -Path $root, $out | Out-Null
           Set-Location -LiteralPath $root
 
@@ -50,7 +51,6 @@ jobs:
           } | ConvertTo-Json -Depth 6
           [System.IO.File]::WriteAllText((Join-Path $root 'package.json'), $manifest + "`n", [System.Text.UTF8Encoding]::new($false))
 
-          # Resolve a deterministic lockfile, then fetch packages from the official registry.
           npm install --package-lock-only --ignore-scripts --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { throw 'Lockfile generation failed.' }
           npm ci --ignore-scripts --no-audit --no-fund
