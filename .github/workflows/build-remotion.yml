@@ -71,7 +71,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Installed dependency inspection failed.' }
           node -e "require('esbuild').transformSync('const x: number = 1', {loader: 'ts'})"
           if ($LASTEXITCODE -ne 0) { throw 'Native bundler availability check failed.' }
-          & (Join-Path $root 'node_modules/.bin/remotion.cmd') --version
+          & (Join-Path $root 'node_modules/.bin/remotion.cmd') versions
           if ($LASTEXITCODE -ne 0) { throw 'Remotion CLI smoke check failed.' }
 
           $details = @{
