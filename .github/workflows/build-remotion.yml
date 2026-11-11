@@ -56,7 +56,7 @@ jobs:
           npm ci --ignore-scripts --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed.' }
 
-          $lock = Get-Content -Raw -LiteralPath (Join-Path $root 'package-lock.json') | ConvertFrom-Json
+          $lock = Get-Content -Raw -LiteralPath (Join-Path $root 'package-lock.json') | ConvertFrom-Json -AsHashtable
           if ($lock.packages.'node_modules/remotion'.version -ne '4.0.484' -or
               $lock.packages.'node_modules/@remotion/cli'.version -ne '4.0.484') {
             throw 'Remotion versions in lockfile do not match the approved version.'
